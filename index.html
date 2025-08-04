@@ -1406,7 +1406,12 @@
             const authErrorDiv = document.getElementById('auth-error');
 
             async function signInWithGoogle() {
-                const { error } = await supabaseClient.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } });
+                const { error } = await supabaseClient.auth.signInWithOAuth({ 
+                    provider: 'google',
+                    options: {
+                        redirectTo: window.location.href // Use the full current URL to ensure correct redirection
+                    }
+                });
                 if (error) authErrorDiv.textContent = `خطأ: ${error.message}`;
             }
 
@@ -1427,7 +1432,7 @@
                 authErrorDiv.textContent = '';
                 const { error } = await supabaseClient.auth.signInWithPassword({ email: document.getElementById('login-email').value, password: document.getElementById('login-password').value });
                 if (error) authErrorDiv.textContent = 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
-                else location.reload();
+                // No reload needed, onAuthStateChange will handle it.
             });
 
             document.getElementById('signup-form').addEventListener('submit', async (e) => {
@@ -1439,9 +1444,13 @@
             });
 
             document.getElementById('logout-btn').addEventListener('click', async () => {
-                if (isGuestMode) { location.reload(); return; }
+                if (isGuestMode) { 
+                    isGuestMode = false;
+                    showScreen('login');
+                    return; 
+                }
                 await supabaseClient.auth.signOut();
-                location.reload();
+                // No reload needed, onAuthStateChange will handle it.
             });
 
             document.getElementById('google-login-btn').addEventListener('click', signInWithGoogle);
@@ -1449,24 +1458,29 @@
             document.getElementById('go-to-signup').addEventListener('click', () => showScreen('signup'));
             document.getElementById('go-to-login').addEventListener('click', () => showScreen('login'));
 
-            // --- Initial Load ---
-            async function main() {
-                const { data: { session } } = await supabaseClient.auth.getSession();
-                if (session) {
+            // --- Initial Load & Auth State Handling ---
+            supabaseClient.auth.onAuthStateChange(async (event, session) => {
+                if (session && session.user) {
+                    // User is logged in
                     isGuestMode = false;
                     document.getElementById('app-header').classList.remove('hidden');
                     document.getElementById('user-stats-container').classList.remove('hidden');
+                    
                     await loadProgress();
                     await loadStats();
                     loadSettings();
                     checkStreak();
                     loadVoices();
+                    
                     showScreen('start');
                 } else {
+                    // User is not logged in
+                    isGuestMode = false;
+                    document.getElementById('app-header').classList.add('hidden');
                     showScreen('login');
                 }
-            }
-            main();
+            });
+
 
             // --- Destruction Mode Logic (unchanged) ---
             const destructionBtn = document.getElementById('activate-destruction-btn');
