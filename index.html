@@ -624,6 +624,11 @@
 
         <main>
             <div class="container">
+                 <!-- Loading Screen -->
+                <div id="loading-screen" class="screen">
+                    <h2 class="screen-title highlight-text">جاري التحميل...</h2>
+                </div>
+
                 <!-- Auth Screens -->
                 <div id="login-screen" class="screen hidden">
                     <h2 class="screen-title highlight-text">تسجيل الدخول</h2>
@@ -839,6 +844,7 @@
             
             // --- DOM Elements ---
             const screens = {
+                loading: document.getElementById('loading-screen'),
                 login: document.getElementById('login-screen'),
                 signup: document.getElementById('signup-screen'),
                 start: document.getElementById('start-screen'),
@@ -873,14 +879,43 @@
             let voices = [];
 
             // --- Gamification & Data Functions ---
-            async function loadStats() {
+            
+            /**
+             * [الإصلاح] دالة جديدة لإعادة تهيئة حالة التطبيق بالكامل عند تسجيل الخروج
+             * هذا يمنع تداخل بيانات المستخدمين ويحل مشكلة عدم القدرة على إعادة تسجيل الدخول
+             */
+            function resetAppState() {
+                isGuestMode = false;
+                progress = {};
+                userStats = {};
+                practiceList = [];
+                currentLevelKey = null;
+                currentLessonKey = null;
+                isGlobalSession = false;
+                previousScreen = 'start';
+                if (countdownInterval) clearInterval(countdownInterval);
+
+                // إعادة تعيين واجهة المستخدم
+                document.getElementById('username-display').textContent = '';
+                document.getElementById('score-value').textContent = '0';
+                document.getElementById('streak-value').textContent = '0';
+                document.getElementById('review-list-container').innerHTML = '';
+                document.getElementById('level-list').innerHTML = '';
+                document.getElementById('lesson-list').innerHTML = '';
+                document.getElementById('level-group-list').innerHTML = '';
+                document.getElementById('level-subgroup-list').innerHTML = '';
+                document.getElementById('auth-error').textContent = '';
+                document.getElementById('app-header').classList.add('hidden');
+            }
+
+            async function loadStats(user) {
                 if (isGuestMode) {
                     const savedStats = localStorage.getItem(GUEST_STATS_KEY);
                     userStats = savedStats ? JSON.parse(savedStats) : { points: 0, current_streak: 0, max_streak: 0, last_login: null, username: 'زائر' };
                     document.getElementById('username-display').textContent = userStats.username;
                     return;
                 }
-                const { data: { user } } = await supabaseClient.auth.getUser();
+                
                 if (!user) return;
 
                 const { data, error } = await supabaseClient
@@ -892,7 +927,12 @@
                 if (data) {
                     userStats = data;
                 } else {
-                     const defaultStats = { id: user.id, points: 0, current_streak: 0, max_streak: 0, last_login: null, username: user.user_metadata.username || user.email };
+                    /**
+                     * [الإصلاح] جلب اسم المستخدم من جوجل بشكل صحيح
+                     * يبحث عن الاسم الكامل (full_name)، ثم اسم المستخدم (username)، ثم يستخدم جزءًا من الإيميل كحل أخير
+                     */
+                    const newUsername = user.user_metadata.full_name || user.user_metadata.username || user.email.split('@')[0];
+                    const defaultStats = { id: user.id, points: 0, current_streak: 0, max_streak: 0, last_login: null, username: newUsername };
                     const { data: newProfile, error: insertError } = await supabaseClient.from('profiles').insert(defaultStats).select().single();
                     if(insertError) console.error("Error creating profile:", insertError);
                     else userStats = newProfile;
@@ -1409,7 +1449,8 @@
                 const { error } = await supabaseClient.auth.signInWithOAuth({ 
                     provider: 'google',
                     options: {
-                        redirectTo: window.location.href // Use the full current URL to ensure correct redirection
+                        // [الإصلاح] استخدام رابط نظيف لإعادة التوجيه لتجنب المشاكل
+                        redirectTo: window.location.origin + window.location.pathname
                     }
                 });
                 if (error) authErrorDiv.textContent = `خطأ: ${error.message}`;
@@ -1417,14 +1458,28 @@
 
             async function continueAsGuest() {
                 isGuestMode = true;
-                document.getElementById('app-header').classList.remove('hidden');
                 document.getElementById('user-stats-container').classList.add('hidden');
-                await loadProgress();
-                await loadStats();
-                loadSettings();
-                checkStreak();
-                loadVoices();
+                await initializeUserSession(null); // تهيئة جلسة الزائر
                 showScreen('start');
+            }
+
+            async function initializeUserSession(user) {
+                // دالة مركزية لتهيئة جلسة المستخدم سواء كان مسجلاً أو زائراً
+                if (isGuestMode) {
+                    await loadProgress();
+                    await loadStats(null);
+                } else if (user) {
+                    await loadProgress();
+                    await loadStats(user);
+                    checkStreak();
+                }
+                loadSettings();
+                loadVoices();
+                updateStatsUI();
+                
+                if (user || isGuestMode) {
+                    document.getElementById('app-header').classList.remove('hidden');
+                }
             }
 
             document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -1432,25 +1487,26 @@
                 authErrorDiv.textContent = '';
                 const { error } = await supabaseClient.auth.signInWithPassword({ email: document.getElementById('login-email').value, password: document.getElementById('login-password').value });
                 if (error) authErrorDiv.textContent = 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
-                // No reload needed, onAuthStateChange will handle it.
+                // onAuthStateChange سيقوم بالباقي
             });
 
             document.getElementById('signup-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 authErrorDiv.textContent = '';
-                const { data, error } = await supabaseClient.auth.signUp({ email: document.getElementById('signup-email').value, password: document.getElementById('signup-password').value, options: { data: { username: document.getElementById('signup-username').value } } });
+                const { data, error } = await supabaseClient.auth.signUp({ email: document.getElementById('signup-email').value, password: document.getElementById('signup-password').value, options: { data: { username: document.getElementById('signup-username').value, full_name: document.getElementById('signup-username').value } } });
                 if (error) { authErrorDiv.textContent = error.message; }
-                else if (data.user) { authErrorDiv.style.color = 'var(--success-color)'; authErrorDiv.textContent = "تم إنشاء الحساب بنجاح! يرجى التحقق من بريدك الإلكتروني لتفعيله."; }
+                else if (data.user) { authErrorDiv.style.color = 'var(--success-color)'; authErrorDiv.textContent = "تم إنشاء الحساب! يرجى التحقق من بريدك الإلكتروني لتفعيله ثم سجل الدخول."; }
             });
 
             document.getElementById('logout-btn').addEventListener('click', async () => {
                 if (isGuestMode) { 
-                    isGuestMode = false;
+                    resetAppState();
                     showScreen('login');
                     return; 
                 }
-                await supabaseClient.auth.signOut();
-                // No reload needed, onAuthStateChange will handle it.
+                const { error } = await supabaseClient.auth.signOut();
+                if (error) console.error('Error logging out:', error);
+                // onAuthStateChange سيقوم بالباقي
             });
 
             document.getElementById('google-login-btn').addEventListener('click', signInWithGoogle);
@@ -1459,24 +1515,19 @@
             document.getElementById('go-to-login').addEventListener('click', () => showScreen('login'));
 
             // --- Initial Load & Auth State Handling ---
+            /**
+             * [الإصلاح] هذا هو المتحكم الرئيسي في حالة المصادقة
+             * يضمن الانتقال السلس بين الحالات (مسجل، غير مسجل) ويقوم بالتهيئة أو إعادة الضبط حسب الحاجة
+             */
             supabaseClient.auth.onAuthStateChange(async (event, session) => {
                 if (session && session.user) {
-                    // User is logged in
+                    // المستخدم قام بتسجيل الدخول
                     isGuestMode = false;
-                    document.getElementById('app-header').classList.remove('hidden');
-                    document.getElementById('user-stats-container').classList.remove('hidden');
-                    
-                    await loadProgress();
-                    await loadStats();
-                    loadSettings();
-                    checkStreak();
-                    loadVoices();
-                    
+                    await initializeUserSession(session.user);
                     showScreen('start');
                 } else {
-                    // User is not logged in
-                    isGuestMode = false;
-                    document.getElementById('app-header').classList.add('hidden');
+                    // المستخدم قام بتسجيل الخروج أو ليس مسجلاً
+                    resetAppState();
                     showScreen('login');
                 }
             });
