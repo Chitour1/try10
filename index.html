@@ -880,10 +880,6 @@
 
             // --- Gamification & Data Functions ---
             
-            /**
-             * [الإصلاح] دالة جديدة لإعادة تهيئة حالة التطبيق بالكامل عند تسجيل الخروج
-             * هذا يمنع تداخل بيانات المستخدمين ويحل مشكلة عدم القدرة على إعادة تسجيل الدخول
-             */
             function resetAppState() {
                 isGuestMode = false;
                 progress = {};
@@ -927,10 +923,6 @@
                 if (data) {
                     userStats = data;
                 } else {
-                    /**
-                     * [الإصلاح] جلب اسم المستخدم من جوجل بشكل صحيح
-                     * يبحث عن الاسم الكامل (full_name)، ثم اسم المستخدم (username)، ثم يستخدم جزءًا من الإيميل كحل أخير
-                     */
                     const newUsername = user.user_metadata.full_name || user.user_metadata.username || user.email.split('@')[0];
                     const defaultStats = { id: user.id, points: 0, current_streak: 0, max_streak: 0, last_login: null, username: newUsername };
                     const { data: newProfile, error: insertError } = await supabaseClient.from('profiles').insert(defaultStats).select().single();
@@ -1094,7 +1086,7 @@
                 if(screenName === 'levelGroup') populateLevelGroupScreen();
                 if(screenName === 'profile') populateProfileScreen();
                 if(screenName === 'reviewCenter') populateReviewCenter();
-                if(screenName === 'lessonSelection') populateLessonSelection(currentLevelKey);
+                if(screenName === 'lessonSelection' && currentLevelKey) populateLessonSelection(currentLevelKey);
             }
 
             async function handleGroupSelection(group) {
@@ -1449,7 +1441,6 @@
                 const { error } = await supabaseClient.auth.signInWithOAuth({ 
                     provider: 'google',
                     options: {
-                        // [الإصلاح] استخدام رابط نظيف لإعادة التوجيه لتجنب المشاكل
                         redirectTo: window.location.origin + window.location.pathname
                     }
                 });
@@ -1504,9 +1495,15 @@
                     showScreen('login');
                     return; 
                 }
+                // [الإصلاح] إظهار شاشة التحميل فوراً لتحسين تجربة المستخدم
+                showScreen('loading');
                 const { error } = await supabaseClient.auth.signOut();
-                if (error) console.error('Error logging out:', error);
-                // onAuthStateChange سيقوم بالباقي
+                if (error) {
+                    console.error('Error logging out:', error);
+                    // في حال فشل تسجيل الخروج، أعد المستخدم إلى ملفه الشخصي
+                    showScreen('profile');
+                }
+                // onAuthStateChange سيتولى إظهار شاشة تسجيل الدخول عند النجاح
             });
 
             document.getElementById('google-login-btn').addEventListener('click', signInWithGoogle);
@@ -1515,22 +1512,54 @@
             document.getElementById('go-to-login').addEventListener('click', () => showScreen('login'));
 
             // --- Initial Load & Auth State Handling ---
+
             /**
-             * [الإصلاح] هذا هو المتحكم الرئيسي في حالة المصادقة
-             * يضمن الانتقال السلس بين الحالات (مسجل، غير مسجل) ويقوم بالتهيئة أو إعادة الضبط حسب الحاجة
+             * [الإصلاح] تم إعادة هيكلة هذا الجزء بالكامل
+             * 1. المستمع `onAuthStateChange` يتعامل الآن مع التغييرات التي تحدث بعد التحميل الأولي (تسجيل الدخول/الخروج).
+             * 2. الدالة `checkInitialSession` تعمل مرة واحدة عند بدء التشغيل للتحقق من وجود جلسة سابقة ومنع التعليق.
              */
+
+            // هذا المستمع يتعامل الآن مع الأحداث التي تقع *بعد* تحميل الصفحة
             supabaseClient.auth.onAuthStateChange(async (event, session) => {
-                if (session && session.user) {
-                    // المستخدم قام بتسجيل الدخول
+                const user = session?.user;
+
+                if (event === 'SIGNED_IN') {
+                    // عند تسجيل المستخدم دخوله بنجاح
+                    resetAppState(); // إعادة الضبط لمسح بيانات وضع الزائر إن وجدت
                     isGuestMode = false;
-                    await initializeUserSession(session.user);
+                    await initializeUserSession(user);
                     showScreen('start');
-                } else {
-                    // المستخدم قام بتسجيل الخروج أو ليس مسجلاً
+                } else if (event === 'SIGNED_OUT') {
+                    // عند تسجيل المستخدم خروجه
                     resetAppState();
                     showScreen('login');
                 }
             });
+
+            // هذه الدالة تتحقق من الجلسة عند التحميل الأولي للصفحة
+            async function checkInitialSession() {
+                try {
+                    const { data: { session }, error } = await supabaseClient.auth.getSession();
+                    if (error) throw error;
+                    
+                    if (session && session.user) {
+                        // المستخدم مسجل دخوله بالفعل من جلسة سابقة
+                        isGuestMode = false;
+                        await initializeUserSession(session.user);
+                        showScreen('start', 'loading');
+                    } else {
+                        // لا يوجد مستخدم مسجل، اعرض صفحة تسجيل الدخول
+                        showScreen('login', 'loading');
+                    }
+                } catch (error) {
+                    console.error("خطأ أثناء التحقق من الجلسة الأولية:", error);
+                    // في حال حدوث أي خطأ، انتقل إلى شاشة تسجيل الدخول كحل بديل آمن
+                    showScreen('login', 'loading');
+                }
+            }
+
+            // بدء التطبيق بالتحقق من الجلسة الأولية
+            await checkInitialSession();
 
 
             // --- Destruction Mode Logic (unchanged) ---
