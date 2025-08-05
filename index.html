@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -625,7 +626,7 @@
         <main>
             <div class="container">
                 <!-- Auth Screens -->
-                <div id="login-screen" class="screen"> <!-- FIX: Show login screen by default -->
+                <div id="login-screen" class="screen">
                     <h2 class="screen-title highlight-text">تسجيل الدخول</h2>
                     <form id="login-form" class="auth-form">
                         <input type="email" id="login-email" placeholder="البريد الإلكتروني" required>
@@ -1040,7 +1041,7 @@
                     console.error("!!! هذا يعني على الأغلب أن قوانين RLS غير صحيحة !!!");
                     console.error("!!! Error loading progress:", error.message);
                     console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                    progress = {};
+                    // FIX: Do not wipe local progress on a temporary load failure
                     return; 
                 }
                 
@@ -1059,8 +1060,26 @@
                 if (!user || !progress[lessonKey]) return;
 
                 const lessonData = progress[lessonKey];
-                const { error } = await supabaseClient.from('lesson_progress').upsert({ user_id: user.id, lesson_key: lessonKey, stage: lessonData.stage, last_completion: lessonData.lastCompletion, sentence_progress: lessonData.sentenceProgress }, { onConflict: ['user_id', 'lesson_key'] });
-                if(error) console.error("Error saving progress for", lessonKey, error);
+                
+                // FIX: Create a new object with snake_case keys that match the database columns
+                const dataForDb = {
+                    user_id: user.id,
+                    lesson_key: lessonKey,
+                    stage: lessonData.stage,
+                    last_completion: lessonData.lastCompletion,
+                    sentence_progress: lessonData.sentenceProgress
+                };
+
+                const { error } = await supabaseClient
+                    .from('lesson_progress')
+                    .upsert(dataForDb, { onConflict: 'user_id, lesson_key' });
+
+                if (error) {
+                    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    console.error("!!! خطأ فادح في حفظ التقدم في قاعدة البيانات !!!");
+                    console.error(`!!! Error saving progress for lesson "${lessonKey}":`, error.message);
+                    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                }
             }
             
             function initializeLessonProgress(lessonKey, library) {
@@ -1386,7 +1405,7 @@
             function populateLevelSelectionScreen() {
                 const levelList = document.getElementById('level-list');
                 levelList.innerHTML = '';
-                Object.keys(LESSON_LIBRARY).forEach(levelName => { // <-- FIX: Renamed variable
+                Object.keys(LESSON_LIBRARY).forEach(levelName => { 
                     const lessonKeysInLevel = Object.keys(LESSON_LIBRARY[levelName]);
                     const totalLessons = lessonKeysInLevel.length;
                     if (totalLessons === 0) return;
@@ -1406,7 +1425,7 @@
                     
                     const card = document.createElement('div');
                     card.className = 'level-card';
-                    card.dataset.level = levelName; // <-- FIX: Use correct variable
+                    card.dataset.level = levelName; 
                     card.style.setProperty('--progress-percent', `${percentage}%`);
                     if (percentage >= 100) card.classList.add('completed');
                     card.innerHTML = `<span class="level-card-text">${levelName}</span>`;
