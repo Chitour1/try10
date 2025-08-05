@@ -947,13 +947,13 @@
                 if(error) console.error("Error saving stats:", error);
             }
 
-            function addPoints(amount) {
+            async function addPoints(amount) {
                 userStats.points = (userStats.points || 0) + amount;
                 updateStatsUI();
-                saveStats();
+                await saveStats(); // <-- FIX: Ensure save completes
             }
 
-            function checkStreak() {
+            async function checkStreak() {
                 const today = new Date().toISOString().split('T')[0];
                 if (userStats.last_login === today) return;
 
@@ -965,7 +965,7 @@
                 userStats.max_streak = Math.max(userStats.max_streak || 0, userStats.current_streak);
                 userStats.last_login = today;
                 updateStatsUI();
-                saveStats();
+                await saveStats(); // <-- FIX: Ensure save completes
             }
 
             function updateStatsUI() {
@@ -1063,12 +1063,12 @@
                 if(error) console.error("Error saving progress for", lessonKey, error);
             }
             
-            function initializeLessonProgress(lessonKey, library) {
+            async function initializeLessonProgress(lessonKey, library) {
                 if (!progress[lessonKey]) {
                     const lessonSentences = getLessonSentences(lessonKey, library);
                     if (!lessonSentences) return;
                     progress[lessonKey] = { stage: 0, lastCompletion: null, sentenceProgress: lessonSentences.reduce((acc, s) => { acc[s.id] = 0; return acc; }, {}) };
-                    saveProgress(lessonKey);
+                    await saveProgress(lessonKey); // <-- FIX: Ensure save completes
                 }
             }
 
@@ -1150,10 +1150,10 @@
                 return card;
             }
             
-            function populateLessonScreen(levelKey, lessonKey) {
+            async function populateLessonScreen(levelKey, lessonKey) {
                 currentLevelKey = levelKey;
                 currentLessonKey = lessonKey;
-                initializeLessonProgress(lessonKey, LESSON_LIBRARY);
+                await initializeLessonProgress(lessonKey, LESSON_LIBRARY);
 
                 const lessonData = LESSON_LIBRARY[levelKey][lessonKey];
                 const lessonProgress = progress[lessonKey];
@@ -1318,7 +1318,7 @@
                 speakSentence(sentence.en);
             }
 
-            function handlePracticeClick() {
+            async function handlePracticeClick() {
                 if (currentPracticeItem >= practiceList.length || currentPracticeItem < 0) return;
 
                 document.getElementById('practice-banner').classList.add('clicked');
@@ -1326,7 +1326,7 @@
 
                 const { sentence, lessonKey } = practiceList[currentPracticeItem];
                 progress[lessonKey].sentenceProgress[sentence.id]++;
-                addPoints(1);
+                await addPoints(1);
 
                 const repsDone = progress[lessonKey].sentenceProgress[sentence.id];
                 const repsNeeded = SRS_STAGES[progress[lessonKey].stage].reps;
@@ -1337,19 +1337,19 @@
                 if (lessonSentences) {
                     const isLessonComplete = lessonSentences.every(s => (progress[lessonKey].sentenceProgress[s.id] || 0) >= repsNeeded);
                     if (isLessonComplete) {
-                        if (progress[lessonKey].stage === 0) addPoints(50);
+                        if (progress[lessonKey].stage === 0) await addPoints(50);
                         progress[lessonKey].stage++;
                         progress[lessonKey].lastCompletion = new Date().toISOString();
                         lessonSentences.forEach(s => { progress[lessonKey].sentenceProgress[s.id] = 0; });
                     }
                 }
                 
-                saveProgress(lessonKey);
+                await saveProgress(lessonKey); // <-- FIX: Ensure save completes
                 currentPracticeItem++;
                 setTimeout(displayCurrentPracticeItem, 400);
             }
             
-            function setupWritingExercise() {
+            async function setupWritingExercise() {
                 const input = document.getElementById('writing-exercise-input');
                 input.value = '';
                 document.getElementById('writing-exercise-feedback').textContent = '';
@@ -1383,47 +1383,47 @@
                 });
             }
 
-            function populateLevelSelectionScreen() {
+            async function populateLevelSelectionScreen() {
                 const levelList = document.getElementById('level-list');
                 levelList.innerHTML = '';
-                Object.keys(LESSON_LIBRARY).forEach(levelName => { // <-- FIX: Renamed variable
+                for (const levelName of Object.keys(LESSON_LIBRARY)) {
                     const lessonKeysInLevel = Object.keys(LESSON_LIBRARY[levelName]);
                     const totalLessons = lessonKeysInLevel.length;
-                    if (totalLessons === 0) return;
+                    if (totalLessons === 0) continue;
 
                     let lessonsInitiallyCompleted = 0;
                     let lessonsMastered = 0;
-                    lessonKeysInLevel.forEach(lessonKey => {
-                        initializeLessonProgress(lessonKey, LESSON_LIBRARY);
+                    for (const lessonKey of lessonKeysInLevel) {
+                        await initializeLessonProgress(lessonKey, LESSON_LIBRARY);
                         const lessonProgress = progress[lessonKey];
                         if (lessonProgress) {
                             if (lessonProgress.stage > 0) lessonsInitiallyCompleted++;
                             if (lessonProgress.stage >= SRS_STAGES.length - 1) lessonsMastered++;
                         }
-                    });
+                    }
 
                     const percentage = totalLessons > 0 ? ((lessonsInitiallyCompleted / totalLessons) * 50) + ((lessonsMastered / totalLessons) * 50) : 0;
                     
                     const card = document.createElement('div');
                     card.className = 'level-card';
-                    card.dataset.level = levelName; // <-- FIX: Use correct variable
+                    card.dataset.level = levelName;
                     card.style.setProperty('--progress-percent', `${percentage}%`);
                     if (percentage >= 100) card.classList.add('completed');
                     card.innerHTML = `<span class="level-card-text">${levelName}</span>`;
                     levelList.appendChild(card);
-                });
+                }
             }
             
-            function populateLessonSelection(levelKey) {
+            async function populateLessonSelection(levelKey) {
                  const lessonList = document.getElementById('lesson-list');
                  lessonList.innerHTML = '';
                  if (!LESSON_LIBRARY[levelKey]) return;
 
-                 Object.keys(LESSON_LIBRARY[levelKey]).forEach(lessonKey => {
-                    initializeLessonProgress(lessonKey, LESSON_LIBRARY);
+                 for (const lessonKey of Object.keys(LESSON_LIBRARY[levelKey])) {
+                    await initializeLessonProgress(lessonKey, LESSON_LIBRARY);
                     const lessonProgress = progress[lessonKey];
                     const lessonSentences = getLessonSentences(lessonKey);
-                    if (!lessonProgress || !lessonSentences) return;
+                    if (!lessonProgress || !lessonSentences) continue;
 
                     const status = getLessonStatus(lessonKey);
                     let percentage = 0;
@@ -1449,7 +1449,7 @@
                     }
                     lCard.innerHTML = `<span class="lesson-card-text">${lessonKey}</span>`;
                     lessonList.appendChild(lCard);
-                 });
+                 }
             }
 
             // --- Event Listeners & Navigation ---
@@ -1468,11 +1468,12 @@
             document.getElementById('practice-speaker-icon').addEventListener('click', (e) => { e.stopPropagation(); if (currentPracticeItem >= 0 && currentPracticeItem < practiceList.length) speakSentence(practiceList[currentPracticeItem].sentence.en); });
             document.getElementById('level-list').addEventListener('click', (e) => { const card = e.target.closest('.level-card'); if (card) { currentLevelKey = card.dataset.level; showScreen('lessonSelection', 'levelSelection'); } });
             document.getElementById('lesson-list').addEventListener('click', (e) => { const card = e.target.closest('.lesson-card'); if (card) { populateLessonScreen(currentLevelKey, card.dataset.lesson); showScreen('lesson', 'lessonSelection'); } });
-            document.getElementById('writing-exercise-check-btn').addEventListener('click', () => {
+            document.getElementById('writing-exercise-check-btn').addEventListener('click', async () => {
                 const input = document.getElementById('writing-exercise-input');
                 const feedback = document.getElementById('writing-exercise-feedback');
                 if (input.value.trim().toLowerCase() === currentLessonKey.toLowerCase()) {
-                    feedback.textContent = 'صحيح! أحسنت.'; feedback.className = 'feedback-correct'; input.disabled = true; document.getElementById('writing-exercise-check-btn').disabled = true; addPoints(10);
+                    feedback.textContent = 'صحيح! أحسنت.'; feedback.className = 'feedback-correct'; input.disabled = true; document.getElementById('writing-exercise-check-btn').disabled = true; 
+                    await addPoints(10);
                     setTimeout(() => showScreen('sessionComplete', 'writingExercise'), 1500);
                 } else {
                     feedback.textContent = `حاول مرة أخرى. الإجابة الصحيحة هي: ${currentLessonKey}`; feedback.className = 'feedback-incorrect';
@@ -1516,7 +1517,7 @@
                 } else if (user) {
                     await loadProgress();
                     await loadStats(user);
-                    checkStreak();
+                    await checkStreak();
                 }
                 loadSettings();
                 loadVoices();
@@ -1569,11 +1570,8 @@
             supabaseClient.auth.onAuthStateChange(async (event, session) => {
                 const user = session?.user;
                 
-                // This is the single source of truth for auth state changes
                 if (user) {
-                    // User is signed in or session is restored
                     if (event === 'INITIAL_SESSION') {
-                        // This is the initial load. Restore session silently.
                         isGuestMode = false;
                         await initializeUserSession(user);
                         const lastScreen = sessionStorage.getItem(LAST_SCREEN_KEY);
@@ -1583,7 +1581,6 @@
                             showScreen('start');
                         }
                     } else if (event === 'SIGNED_IN') {
-                        // This is a new login action.
                         resetAppState();
                         isGuestMode = false;
                         await initializeUserSession(user);
@@ -1593,7 +1590,6 @@
                         window.history.replaceState({}, document.title, window.location.pathname);
                     }
                 } else {
-                    // User is signed out or has no session
                     resetAppState();
                     showScreen('login');
                 }
