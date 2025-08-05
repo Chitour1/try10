@@ -828,7 +828,7 @@
             const SETTINGS_STORAGE_KEY = 'english_app_settings_v1';
             const GUEST_PROGRESS_KEY = 'english_app_guest_progress_v1';
             const GUEST_STATS_KEY = 'english_app_guest_stats_v1';
-            const LAST_SCREEN_KEY = 'english_app_last_screen_v1'; // <-- FIX: Key for session storage
+            const LAST_SCREEN_KEY = 'english_app_last_screen_v1';
             const SRS_STAGES = [
                 { name: "مرحلة التعلم", intervalDays: 1, reps: 6 },
                 { name: "مراجعة اليوم التالي", intervalDays: 1, reps: 4 },
@@ -873,7 +873,7 @@
             let practiceOriginScreen = 'start';
             let countdownInterval = null;
             let voices = [];
-            let currentScreenId = 'login'; // <-- FIX: Track current screen
+            let currentScreenId = 'login';
 
             // --- Gamification & Data Functions ---
             
@@ -888,8 +888,6 @@
                 previousScreen = 'start';
                 practiceOriginScreen = 'start';
                 if (countdownInterval) clearInterval(countdownInterval);
-
-                // إعادة تعيين واجهة المستخدم
                 document.getElementById('username-display').textContent = '';
                 document.getElementById('score-value').textContent = '0';
                 document.getElementById('streak-value').textContent = '0';
@@ -918,6 +916,13 @@
                     .eq('id', user.id)
                     .single();
 
+                if (error && error.code !== 'PGRST116') {
+                    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    console.error("!!! خطأ في تحميل ملف المستخدم من قاعدة البيانات !!!");
+                    console.error("!!! Error loading profile:", error.message);
+                    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                }
+
                 if (data) {
                     userStats = data;
                 } else {
@@ -927,7 +932,7 @@
                     if(insertError) console.error("Error creating profile:", insertError);
                     else userStats = newProfile;
                 }
-                document.getElementById('username-display').textContent = userStats.username;
+                document.getElementById('username-display').textContent = userStats.username || '';
             }
 
             async function saveStats() {
@@ -1028,7 +1033,16 @@
                 if (!user) return;
 
                 const { data, error } = await supabaseClient.from('lesson_progress').select('*').eq('user_id', user.id);
-                if (error) { console.error("Error loading progress:", error); return; }
+                
+                if (error) { 
+                    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    console.error("!!! خطأ فادح في تحميل التقدم من قاعدة البيانات !!!");
+                    console.error("!!! هذا يعني على الأغلب أن قوانين RLS غير صحيحة !!!");
+                    console.error("!!! Error loading progress:", error.message);
+                    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    progress = {};
+                    return; 
+                }
                 
                 progress = data.reduce((acc, item) => {
                     acc[item.lesson_key] = { stage: item.stage, lastCompletion: item.last_completion, sentenceProgress: item.sentence_progress };
@@ -1077,10 +1091,9 @@
             // --- UI & Flow Management (Refactored for robustness) ---
             function showScreen(screenName, fromScreen = null) {
                 if (fromScreen) previousScreen = fromScreen;
-                currentScreenId = screenName; // <-- FIX: Update current screen ID
+                currentScreenId = screenName;
                 Object.values(screens).forEach(screen => screen.classList.add('hidden'));
                 
-                // Always re-populate screen content to reflect latest progress
                 if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
                 
                 if (screenName === 'levelGroup') populateLevelGroupScreen();
@@ -1548,7 +1561,6 @@
 
             // --- Initial Load & Auth State Handling ---
             window.addEventListener('beforeunload', () => {
-                // <-- FIX: Save current screen before page unloads
                 if (currentScreenId && currentScreenId !== 'login' && currentScreenId !== 'signup') {
                     sessionStorage.setItem(LAST_SCREEN_KEY, currentScreenId);
                 }
@@ -1556,47 +1568,36 @@
 
             supabaseClient.auth.onAuthStateChange(async (event, session) => {
                 const user = session?.user;
-
-                if (event === 'SIGNED_IN') {
-                    resetAppState();
-                    isGuestMode = false;
-                    await initializeUserSession(user);
-                    showScreen('start');
-                     // FIX: Clean the URL hash from OAuth redirect
-                    if (window.location.hash.includes('access_token')) {
-                        window.history.replaceState({}, document.title, window.location.pathname);
-                    }
-                } else if (event === 'SIGNED_OUT') {
-                    resetAppState();
-                    showScreen('login');
-                }
-            });
-
-            async function checkInitialSession() {
-                try {
-                    const { data: { session }, error } = await supabaseClient.auth.getSession();
-                    if (error) throw error;
-                    
-                    if (session && session.user) {
+                
+                // This is the single source of truth for auth state changes
+                if (user) {
+                    // User is signed in or session is restored
+                    if (event === 'INITIAL_SESSION') {
+                        // This is the initial load. Restore session silently.
                         isGuestMode = false;
-                        await initializeUserSession(session.user);
+                        await initializeUserSession(user);
                         const lastScreen = sessionStorage.getItem(LAST_SCREEN_KEY);
-                        // FIX: Go to last screen if it exists, otherwise go to start
                         if (lastScreen && screens[lastScreen]) {
                             showScreen(lastScreen);
                         } else {
                             showScreen('start');
                         }
-                    } else {
-                        showScreen('login');
+                    } else if (event === 'SIGNED_IN') {
+                        // This is a new login action.
+                        resetAppState();
+                        isGuestMode = false;
+                        await initializeUserSession(user);
+                        showScreen('start');
                     }
-                } catch (error) {
-                    console.error("خطأ أثناء التحقق من الجلسة الأولية:", error);
+                    if (window.location.hash.includes('access_token')) {
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                    }
+                } else {
+                    // User is signed out or has no session
+                    resetAppState();
                     showScreen('login');
                 }
-            }
-
-            await checkInitialSession();
+            });
 
 
             // --- Destruction Mode Logic (unchanged) ---
