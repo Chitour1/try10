@@ -746,7 +746,7 @@
                 </div>
         
                 <!-- Lesson Screen -->
-                <div id="lesson-screen" class="screen hidden">
+                <div id="lesson-screen" class="screen scrollable-screen hidden">
                     <div class="back-btn" id="back-to-lesson-select-from-lesson-view">→</div>
                     <h2 id="lesson-view-title" class="screen-title highlight-text"></h2>
                     <div id="lesson-sentence-list" class="list-container"></div>
@@ -1576,10 +1576,6 @@
                     isGuestMode = false;
                     await initializeUserSession(user);
                     showScreen('start');
-                     // FIX: Clean the URL hash from OAuth redirect
-                    if (window.location.hash.includes('access_token')) {
-                        window.history.replaceState({}, document.title, window.location.pathname);
-                    }
                 } else if (event === 'SIGNED_OUT') {
                     resetAppState();
                     showScreen('login');
@@ -1591,6 +1587,8 @@
                     const { data: { session }, error } = await supabaseClient.auth.getSession();
                     if (error) throw error;
                     
+                    document.querySelector('main').style.display = 'flex'; // Show content area
+
                     if (session && session.user) {
                         isGuestMode = false;
                         await initializeUserSession(session.user);
@@ -1636,4 +1634,4 @@
         document.addEventListener('DOMContentLoaded', initializeApp);
     </script>
 </body>
-</ht
+</html>
