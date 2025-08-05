@@ -801,7 +801,7 @@
                 <div id="session-complete-screen" class="screen hidden">
                      <h2 class="screen-title highlight-text">ممتاز!</h2>
                      <p>لقد أتممت الجلسة. عمل رائع!</p>
-                     <button id="back-to-main-from-complete" class="btn">العودة للقائمة الرئيسية</button>
+                     <button id="back-to-origin-from-complete" class="btn">متابعة</button>
                 </div>
             </div>
         </main>
@@ -875,6 +875,7 @@
             let currentLessonKey = null;
             let isGlobalSession = false;
             let previousScreen = 'start';
+            let practiceOriginScreen = 'start'; // <-- FIX: To remember where practice was started
             let countdownInterval = null;
             let voices = [];
 
@@ -889,6 +890,7 @@
                 currentLessonKey = null;
                 isGlobalSession = false;
                 previousScreen = 'start';
+                practiceOriginScreen = 'start';
                 if (countdownInterval) clearInterval(countdownInterval);
 
                 // إعادة تعيين واجهة المستخدم
@@ -1087,6 +1089,7 @@
                 if(screenName === 'profile') populateProfileScreen();
                 if(screenName === 'reviewCenter') populateReviewCenter();
                 if(screenName === 'lessonSelection' && currentLevelKey) populateLessonSelection(currentLevelKey);
+                if(screenName === 'levelSelection') populateLevelSelectionScreen();
             }
 
             async function handleGroupSelection(group) {
@@ -1236,12 +1239,15 @@
                 });
             }
 
-            // --- Practice Flow ---
+            // --- Practice Flow (Refactored) ---
             function startPracticeSession(isGlobal = false) {
                 isGlobalSession = isGlobal;
+                practiceOriginScreen = isGlobal ? 'reviewCenter' : 'lessonSelection'; // <-- FIX
                 practiceList = [];
                 let lessonsToPractice = isGlobal ? Object.keys(progress).filter(lk => getLessonStatus(lk).status === 'active') : [currentLessonKey];
+                
                 if (lessonsToPractice.length === 0) return;
+
                 const libraryToUse = isGlobal ? FULL_LESSON_LIBRARY : LESSON_LIBRARY;
                 lessonsToPractice.forEach(lessonKey => {
                     const lessonProgress = progress[lessonKey];
@@ -1256,21 +1262,28 @@
                         }
                     });
                 });
-                if (practiceList.length === 0) return;
+
+                if (practiceList.length === 0) {
+                    // This can happen if a lesson is "active" but all reps are somehow done.
+                    // Go back to the origin screen to refresh it.
+                    showScreen(practiceOriginScreen);
+                    return;
+                }
+
                 practiceList.sort(() => Math.random() - 0.5);
-                currentPracticeItem = -1;
-                showScreen('practice', isGlobal ? 'reviewCenter' : 'lesson');
-                displayNextPracticeItem();
+                currentPracticeItem = 0; // Start at the first item
+                showScreen('practice', practiceOriginScreen);
+                displayCurrentPracticeItem();
             }
 
-            function displayNextPracticeItem() {
-                currentPracticeItem++;
+            function displayCurrentPracticeItem() {
                 if (currentPracticeItem >= practiceList.length) {
                     if (!isGlobalSession) setupWritingExercise();
                     else showScreen('sessionComplete', 'practice');
                     return;
                 }
-                const { sentence } = practiceList[currentPracticeItem];
+
+                const { sentence, lessonKey } = practiceList[currentPracticeItem];
                 document.getElementById('practice-context').textContent = sentence.context;
                 document.getElementById('practice-text-ar').textContent = sentence.ar;
                 document.getElementById('practice-text-en').innerHTML = sentence.en.replace(new RegExp(sentence.highlight.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), `<span class="highlight">${sentence.highlight}</span>`);
@@ -1279,8 +1292,8 @@
                 const tipContainer = document.getElementById('practice-tip-container');
                 tipContainer.innerHTML = sentence.tip_ar ? `<div class="sc-tip"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg><span>${sentence.tip_ar}</span></div>` : '';
                 tipContainer.style.display = sentence.tip_ar ? 'block' : 'none';
-                const { lessonKey } = practiceList[currentPracticeItem];
-                const repsDone = progress[lessonKey].sentenceProgress[sentence.id];
+                
+                const repsDone = progress[lessonKey].sentenceProgress[sentence.id] || 0;
                 const repsNeeded = SRS_STAGES[progress[lessonKey].stage].reps;
                 document.getElementById('practice-counter').textContent = `${repsDone} / ${repsNeeded}`;
                 speakSentence(sentence.en);
@@ -1288,24 +1301,33 @@
 
             function handlePracticeClick() {
                 if (currentPracticeItem >= practiceList.length || currentPracticeItem < 0) return;
+
                 document.getElementById('practice-banner').classList.add('clicked');
                 setTimeout(() => { document.getElementById('practice-banner').classList.remove('clicked'); }, 150);
+
                 const { sentence, lessonKey } = practiceList[currentPracticeItem];
                 progress[lessonKey].sentenceProgress[sentence.id]++;
                 addPoints(1);
+
+                const repsDone = progress[lessonKey].sentenceProgress[sentence.id];
+                const repsNeeded = SRS_STAGES[progress[lessonKey].stage].reps;
+                document.getElementById('practice-counter').textContent = `${repsDone} / ${repsNeeded}`;
+
                 const libraryToUse = isGlobalSession ? FULL_LESSON_LIBRARY : LESSON_LIBRARY;
                 const lessonSentences = getLessonSentences(lessonKey, libraryToUse);
-                if (!lessonSentences) { displayNextPracticeItem(); return; }
-                const repsNeeded = SRS_STAGES[progress[lessonKey].stage].reps;
-                const isLessonComplete = lessonSentences.every(s => (progress[lessonKey].sentenceProgress[s.id] || 0) >= repsNeeded);
-                if (isLessonComplete) {
-                    if (progress[lessonKey].stage === 0) addPoints(50);
-                    progress[lessonKey].stage++;
-                    progress[lessonKey].lastCompletion = new Date().toISOString();
-                    lessonSentences.forEach(s => { progress[lessonKey].sentenceProgress[s.id] = 0; });
+                if (lessonSentences) {
+                    const isLessonComplete = lessonSentences.every(s => (progress[lessonKey].sentenceProgress[s.id] || 0) >= repsNeeded);
+                    if (isLessonComplete) {
+                        if (progress[lessonKey].stage === 0) addPoints(50);
+                        progress[lessonKey].stage++;
+                        progress[lessonKey].lastCompletion = new Date().toISOString();
+                        lessonSentences.forEach(s => { progress[lessonKey].sentenceProgress[s.id] = 0; });
+                    }
                 }
+                
                 saveProgress(lessonKey);
-                displayNextPracticeItem();
+                currentPracticeItem++;
+                setTimeout(displayCurrentPracticeItem, 400);
             }
             
             function setupWritingExercise() {
@@ -1345,11 +1367,13 @@
             function populateLevelSelectionScreen() {
                 const levelList = document.getElementById('level-list');
                 levelList.innerHTML = '';
-                Object.keys(LESSON_LIBRARY).forEach(levelKey => {
-                    const lessonKeysInLevel = Object.keys(LESSON_LIBRARY[levelKey]);
+                Object.keys(LESSON_LIBRARY).forEach(levelName => { // <-- FIX: Renamed variable
+                    const lessonKeysInLevel = Object.keys(LESSON_LIBRARY[levelName]);
                     const totalLessons = lessonKeysInLevel.length;
                     if (totalLessons === 0) return;
-                    let lessonsInitiallyCompleted = 0, lessonsMastered = 0;
+
+                    let lessonsInitiallyCompleted = 0;
+                    let lessonsMastered = 0;
                     lessonKeysInLevel.forEach(lessonKey => {
                         initializeLessonProgress(lessonKey, LESSON_LIBRARY);
                         const lessonProgress = progress[lessonKey];
@@ -1358,13 +1382,15 @@
                             if (lessonProgress.stage >= SRS_STAGES.length - 1) lessonsMastered++;
                         }
                     });
-                    const percentage = ((lessonsInitiallyCompleted / totalLessons) * 50) + ((lessonsMastered / totalLessons) * 50);
+
+                    const percentage = totalLessons > 0 ? ((lessonsInitiallyCompleted / totalLessons) * 50) + ((lessonsMastered / totalLessons) * 50) : 0;
+                    
                     const card = document.createElement('div');
                     card.className = 'level-card';
-                    card.dataset.level = levelKey;
+                    card.dataset.level = levelName; // <-- FIX: Use correct variable
                     card.style.setProperty('--progress-percent', `${percentage}%`);
                     if (percentage >= 100) card.classList.add('completed');
-                    card.innerHTML = `<span class="level-card-text">${levelKey}</span>`;
+                    card.innerHTML = `<span class="level-card-text">${levelName}</span>`;
                     levelList.appendChild(card);
                 });
             }
@@ -1372,14 +1398,19 @@
             function populateLessonSelection(levelKey) {
                  const lessonList = document.getElementById('lesson-list');
                  lessonList.innerHTML = '';
+                 if (!LESSON_LIBRARY[levelKey]) return;
+
                  Object.keys(LESSON_LIBRARY[levelKey]).forEach(lessonKey => {
                     initializeLessonProgress(lessonKey, LESSON_LIBRARY);
                     const lessonProgress = progress[lessonKey];
                     const lessonSentences = getLessonSentences(lessonKey);
                     if (!lessonProgress || !lessonSentences) return;
+
                     const status = getLessonStatus(lessonKey);
                     let percentage = 0;
-                    if (status.status === 'mastered' || (lessonProgress.stage > 0 && status.status === 'locked')) {
+                    if (status.status === 'mastered' || (lessonProgress.stage >= SRS_STAGES.length - 1)) {
+                        percentage = 100;
+                    } else if (lessonProgress.stage > 0 && status.status === 'locked') {
                         percentage = 100;
                     } else if (lessonProgress.stage === 0) {
                         const repsNeededForStage = SRS_STAGES[lessonProgress.stage].reps;
@@ -1387,11 +1418,16 @@
                         const totalRepsNeeded = lessonSentences.length * repsNeededForStage;
                         if (totalRepsNeeded > 0) percentage = (totalRepsDone / totalRepsNeeded) * 100;
                     }
+
                     const lCard = document.createElement('div');
                     lCard.className = 'lesson-card';
                     lCard.dataset.lesson = lessonKey;
-                    if (percentage >= 100) { lCard.style.setProperty('--progress-percent', `100%`); lCard.classList.add('completed'); } 
-                    else { lCard.style.setProperty('--progress-percent', `${percentage}%`); }
+                    if (percentage >= 100) { 
+                        lCard.style.setProperty('--progress-percent', `100%`); 
+                        lCard.classList.add('completed');
+                    } else { 
+                        lCard.style.setProperty('--progress-percent', `${percentage}%`); 
+                    }
                     lCard.innerHTML = `<span class="lesson-card-text">${lessonKey}</span>`;
                     lessonList.appendChild(lCard);
                  });
@@ -1432,7 +1468,7 @@
             document.getElementById('back-to-level-select-from-lesson').addEventListener('click', () => showScreen('levelSelection'));
             document.getElementById('back-to-lesson-select-from-lesson-view').addEventListener('click', () => showScreen('lessonSelection'));
             document.getElementById('back-to-previous-screen').addEventListener('click', () => showScreen(previousScreen));
-            document.getElementById('back-to-main-from-complete').addEventListener('click', () => showScreen('start'));
+            document.getElementById('back-to-origin-from-complete').addEventListener('click', () => showScreen(practiceOriginScreen)); // <-- FIX
             
             // --- Auth Logic ---
             const authErrorDiv = document.getElementById('auth-error');
@@ -1495,15 +1531,12 @@
                     showScreen('login');
                     return; 
                 }
-                // [الإصلاح] إظهار شاشة التحميل فوراً لتحسين تجربة المستخدم
                 showScreen('loading');
                 const { error } = await supabaseClient.auth.signOut();
                 if (error) {
                     console.error('Error logging out:', error);
-                    // في حال فشل تسجيل الخروج، أعد المستخدم إلى ملفه الشخصي
                     showScreen('profile');
                 }
-                // onAuthStateChange سيتولى إظهار شاشة تسجيل الدخول عند النجاح
             });
 
             document.getElementById('google-login-btn').addEventListener('click', signInWithGoogle);
@@ -1512,53 +1545,38 @@
             document.getElementById('go-to-login').addEventListener('click', () => showScreen('login'));
 
             // --- Initial Load & Auth State Handling ---
-
-            /**
-             * [الإصلاح] تم إعادة هيكلة هذا الجزء بالكامل
-             * 1. المستمع `onAuthStateChange` يتعامل الآن مع التغييرات التي تحدث بعد التحميل الأولي (تسجيل الدخول/الخروج).
-             * 2. الدالة `checkInitialSession` تعمل مرة واحدة عند بدء التشغيل للتحقق من وجود جلسة سابقة ومنع التعليق.
-             */
-
-            // هذا المستمع يتعامل الآن مع الأحداث التي تقع *بعد* تحميل الصفحة
             supabaseClient.auth.onAuthStateChange(async (event, session) => {
                 const user = session?.user;
 
                 if (event === 'SIGNED_IN') {
-                    // عند تسجيل المستخدم دخوله بنجاح
-                    resetAppState(); // إعادة الضبط لمسح بيانات وضع الزائر إن وجدت
+                    resetAppState();
                     isGuestMode = false;
                     await initializeUserSession(user);
                     showScreen('start');
                 } else if (event === 'SIGNED_OUT') {
-                    // عند تسجيل المستخدم خروجه
                     resetAppState();
                     showScreen('login');
                 }
             });
 
-            // هذه الدالة تتحقق من الجلسة عند التحميل الأولي للصفحة
             async function checkInitialSession() {
                 try {
                     const { data: { session }, error } = await supabaseClient.auth.getSession();
                     if (error) throw error;
                     
                     if (session && session.user) {
-                        // المستخدم مسجل دخوله بالفعل من جلسة سابقة
                         isGuestMode = false;
                         await initializeUserSession(session.user);
                         showScreen('start', 'loading');
                     } else {
-                        // لا يوجد مستخدم مسجل، اعرض صفحة تسجيل الدخول
                         showScreen('login', 'loading');
                     }
                 } catch (error) {
                     console.error("خطأ أثناء التحقق من الجلسة الأولية:", error);
-                    // في حال حدوث أي خطأ، انتقل إلى شاشة تسجيل الدخول كحل بديل آمن
                     showScreen('login', 'loading');
                 }
             }
 
-            // بدء التطبيق بالتحقق من الجلسة الأولية
             await checkInitialSession();
 
 
