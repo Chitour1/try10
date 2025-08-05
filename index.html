@@ -624,13 +624,8 @@
 
         <main>
             <div class="container">
-                 <!-- Loading Screen -->
-                <div id="loading-screen" class="screen">
-                    <h2 class="screen-title highlight-text">جاري التحميل...</h2>
-                </div>
-
                 <!-- Auth Screens -->
-                <div id="login-screen" class="screen hidden">
+                <div id="login-screen" class="screen"> <!-- FIX: Show login screen by default -->
                     <h2 class="screen-title highlight-text">تسجيل الدخول</h2>
                     <form id="login-form" class="auth-form">
                         <input type="email" id="login-email" placeholder="البريد الإلكتروني" required>
@@ -751,7 +746,7 @@
                 </div>
         
                 <!-- Lesson Screen -->
-                <div id="lesson-screen" class="screen scrollable-screen hidden">
+                <div id="lesson-screen" class="screen hidden">
                     <div class="back-btn" id="back-to-lesson-select-from-lesson-view">→</div>
                     <h2 id="lesson-view-title" class="screen-title highlight-text"></h2>
                     <div id="lesson-sentence-list" class="list-container"></div>
@@ -833,6 +828,7 @@
             const SETTINGS_STORAGE_KEY = 'english_app_settings_v1';
             const GUEST_PROGRESS_KEY = 'english_app_guest_progress_v1';
             const GUEST_STATS_KEY = 'english_app_guest_stats_v1';
+            const LAST_SCREEN_KEY = 'english_app_last_screen_v1'; // <-- FIX: Key for session storage
             const SRS_STAGES = [
                 { name: "مرحلة التعلم", intervalDays: 1, reps: 6 },
                 { name: "مراجعة اليوم التالي", intervalDays: 1, reps: 4 },
@@ -844,7 +840,6 @@
             
             // --- DOM Elements ---
             const screens = {
-                loading: document.getElementById('loading-screen'),
                 login: document.getElementById('login-screen'),
                 signup: document.getElementById('signup-screen'),
                 start: document.getElementById('start-screen'),
@@ -875,9 +870,10 @@
             let currentLessonKey = null;
             let isGlobalSession = false;
             let previousScreen = 'start';
-            let practiceOriginScreen = 'start'; // <-- FIX: To remember where practice was started
+            let practiceOriginScreen = 'start';
             let countdownInterval = null;
             let voices = [];
+            let currentScreenId = 'login'; // <-- FIX: Track current screen
 
             // --- Gamification & Data Functions ---
             
@@ -1078,18 +1074,29 @@
                 return (new Date().getTime() >= dueTime) ? { status: 'active', stage: lessonProgress.stage } : { status: 'locked', stage: lessonProgress.stage, dueTimestamp: dueTime };
             }
             
-            // --- UI & Flow Management ---
+            // --- UI & Flow Management (Refactored for robustness) ---
             function showScreen(screenName, fromScreen = null) {
                 if (fromScreen) previousScreen = fromScreen;
+                currentScreenId = screenName; // <-- FIX: Update current screen ID
                 Object.values(screens).forEach(screen => screen.classList.add('hidden'));
-                screens[screenName].classList.remove('hidden');
                 
+                // Always re-populate screen content to reflect latest progress
                 if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
-                if(screenName === 'levelGroup') populateLevelGroupScreen();
-                if(screenName === 'profile') populateProfileScreen();
-                if(screenName === 'reviewCenter') populateReviewCenter();
-                if(screenName === 'lessonSelection' && currentLevelKey) populateLessonSelection(currentLevelKey);
-                if(screenName === 'levelSelection') populateLevelSelectionScreen();
+                
+                if (screenName === 'levelGroup') populateLevelGroupScreen();
+                if (screenName === 'profile') populateProfileScreen();
+                if (screenName === 'reviewCenter') populateReviewCenter();
+                if (screenName === 'levelSelection' && Object.keys(LESSON_LIBRARY).length > 0) {
+                    populateLevelSelectionScreen();
+                }
+                if (screenName === 'lessonSelection' && currentLevelKey) {
+                    populateLessonSelection(currentLevelKey);
+                }
+                if (screenName === 'lesson' && currentLevelKey && currentLessonKey) {
+                    populateLessonScreen(currentLevelKey, currentLessonKey);
+                }
+                
+                screens[screenName].classList.remove('hidden');
             }
 
             async function handleGroupSelection(group) {
@@ -1104,7 +1111,6 @@
                     } else {
                         LESSON_LIBRARY = content;
                         document.getElementById('level-group-title').textContent = group.groupName;
-                        populateLevelSelectionScreen();
                         showScreen('levelSelection', 'levelSubgroup');
                     }
                 } catch (error) { console.error("Failed to load library content:", error); }
@@ -1468,7 +1474,7 @@
             document.getElementById('back-to-level-select-from-lesson').addEventListener('click', () => showScreen('levelSelection'));
             document.getElementById('back-to-lesson-select-from-lesson-view').addEventListener('click', () => showScreen('lessonSelection'));
             document.getElementById('back-to-previous-screen').addEventListener('click', () => showScreen(previousScreen));
-            document.getElementById('back-to-origin-from-complete').addEventListener('click', () => showScreen(practiceOriginScreen)); // <-- FIX
+            document.getElementById('back-to-origin-from-complete').addEventListener('click', () => showScreen(practiceOriginScreen));
             
             // --- Auth Logic ---
             const authErrorDiv = document.getElementById('auth-error');
@@ -1486,12 +1492,11 @@
             async function continueAsGuest() {
                 isGuestMode = true;
                 document.getElementById('user-stats-container').classList.add('hidden');
-                await initializeUserSession(null); // تهيئة جلسة الزائر
+                await initializeUserSession(null);
                 showScreen('start');
             }
 
             async function initializeUserSession(user) {
-                // دالة مركزية لتهيئة جلسة المستخدم سواء كان مسجلاً أو زائراً
                 if (isGuestMode) {
                     await loadProgress();
                     await loadStats(null);
@@ -1514,7 +1519,6 @@
                 authErrorDiv.textContent = '';
                 const { error } = await supabaseClient.auth.signInWithPassword({ email: document.getElementById('login-email').value, password: document.getElementById('login-password').value });
                 if (error) authErrorDiv.textContent = 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
-                // onAuthStateChange سيقوم بالباقي
             });
 
             document.getElementById('signup-form').addEventListener('submit', async (e) => {
@@ -1531,11 +1535,9 @@
                     showScreen('login');
                     return; 
                 }
-                showScreen('loading');
                 const { error } = await supabaseClient.auth.signOut();
                 if (error) {
                     console.error('Error logging out:', error);
-                    showScreen('profile');
                 }
             });
 
@@ -1545,6 +1547,13 @@
             document.getElementById('go-to-login').addEventListener('click', () => showScreen('login'));
 
             // --- Initial Load & Auth State Handling ---
+            window.addEventListener('beforeunload', () => {
+                // <-- FIX: Save current screen before page unloads
+                if (currentScreenId && currentScreenId !== 'login' && currentScreenId !== 'signup') {
+                    sessionStorage.setItem(LAST_SCREEN_KEY, currentScreenId);
+                }
+            });
+
             supabaseClient.auth.onAuthStateChange(async (event, session) => {
                 const user = session?.user;
 
@@ -1553,6 +1562,10 @@
                     isGuestMode = false;
                     await initializeUserSession(user);
                     showScreen('start');
+                     // FIX: Clean the URL hash from OAuth redirect
+                    if (window.location.hash.includes('access_token')) {
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                    }
                 } else if (event === 'SIGNED_OUT') {
                     resetAppState();
                     showScreen('login');
@@ -1567,13 +1580,19 @@
                     if (session && session.user) {
                         isGuestMode = false;
                         await initializeUserSession(session.user);
-                        showScreen('start', 'loading');
+                        const lastScreen = sessionStorage.getItem(LAST_SCREEN_KEY);
+                        // FIX: Go to last screen if it exists, otherwise go to start
+                        if (lastScreen && screens[lastScreen]) {
+                            showScreen(lastScreen);
+                        } else {
+                            showScreen('start');
+                        }
                     } else {
-                        showScreen('login', 'loading');
+                        showScreen('login');
                     }
                 } catch (error) {
                     console.error("خطأ أثناء التحقق من الجلسة الأولية:", error);
-                    showScreen('login', 'loading');
+                    showScreen('login');
                 }
             }
 
