@@ -624,8 +624,13 @@
 
         <main>
             <div class="container">
+                 <!-- Loading Screen -->
+                <div id="loading-screen" class="screen">
+                    <h2 class="screen-title highlight-text">جاري التحميل...</h2>
+                </div>
+
                 <!-- Auth Screens -->
-                <div id="login-screen" class="screen"> <!-- FIX: Show login screen by default -->
+                <div id="login-screen" class="screen hidden">
                     <h2 class="screen-title highlight-text">تسجيل الدخول</h2>
                     <form id="login-form" class="auth-form">
                         <input type="email" id="login-email" placeholder="البريد الإلكتروني" required>
@@ -828,7 +833,6 @@
             const SETTINGS_STORAGE_KEY = 'english_app_settings_v1';
             const GUEST_PROGRESS_KEY = 'english_app_guest_progress_v1';
             const GUEST_STATS_KEY = 'english_app_guest_stats_v1';
-            const LAST_SCREEN_KEY = 'english_app_last_screen_v1'; // <-- FIX: Key for session storage
             const SRS_STAGES = [
                 { name: "مرحلة التعلم", intervalDays: 1, reps: 6 },
                 { name: "مراجعة اليوم التالي", intervalDays: 1, reps: 4 },
@@ -840,6 +844,7 @@
             
             // --- DOM Elements ---
             const screens = {
+                loading: document.getElementById('loading-screen'),
                 login: document.getElementById('login-screen'),
                 signup: document.getElementById('signup-screen'),
                 start: document.getElementById('start-screen'),
@@ -870,10 +875,9 @@
             let currentLessonKey = null;
             let isGlobalSession = false;
             let previousScreen = 'start';
-            let practiceOriginScreen = 'start';
+            let practiceOriginScreen = 'start'; // <-- FIX: To remember where practice was started
             let countdownInterval = null;
             let voices = [];
-            let currentScreenId = 'login'; // <-- FIX: Track current screen
 
             // --- Gamification & Data Functions ---
             
@@ -1074,29 +1078,18 @@
                 return (new Date().getTime() >= dueTime) ? { status: 'active', stage: lessonProgress.stage } : { status: 'locked', stage: lessonProgress.stage, dueTimestamp: dueTime };
             }
             
-            // --- UI & Flow Management (Refactored for robustness) ---
+            // --- UI & Flow Management ---
             function showScreen(screenName, fromScreen = null) {
                 if (fromScreen) previousScreen = fromScreen;
-                currentScreenId = screenName; // <-- FIX: Update current screen ID
                 Object.values(screens).forEach(screen => screen.classList.add('hidden'));
-                
-                // Always re-populate screen content to reflect latest progress
-                if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
-                
-                if (screenName === 'levelGroup') populateLevelGroupScreen();
-                if (screenName === 'profile') populateProfileScreen();
-                if (screenName === 'reviewCenter') populateReviewCenter();
-                if (screenName === 'levelSelection' && Object.keys(LESSON_LIBRARY).length > 0) {
-                    populateLevelSelectionScreen();
-                }
-                if (screenName === 'lessonSelection' && currentLevelKey) {
-                    populateLessonSelection(currentLevelKey);
-                }
-                if (screenName === 'lesson' && currentLevelKey && currentLessonKey) {
-                    populateLessonScreen(currentLevelKey, currentLessonKey);
-                }
-                
                 screens[screenName].classList.remove('hidden');
+                
+                if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+                if(screenName === 'levelGroup') populateLevelGroupScreen();
+                if(screenName === 'profile') populateProfileScreen();
+                if(screenName === 'reviewCenter') populateReviewCenter();
+                if(screenName === 'lessonSelection' && currentLevelKey) populateLessonSelection(currentLevelKey);
+                if(screenName === 'levelSelection') populateLevelSelectionScreen();
             }
 
             async function handleGroupSelection(group) {
@@ -1111,6 +1104,7 @@
                     } else {
                         LESSON_LIBRARY = content;
                         document.getElementById('level-group-title').textContent = group.groupName;
+                        populateLevelSelectionScreen();
                         showScreen('levelSelection', 'levelSubgroup');
                     }
                 } catch (error) { console.error("Failed to load library content:", error); }
@@ -1245,10 +1239,10 @@
                 });
             }
 
-            // --- Practice Flow ---
+            // --- Practice Flow (Refactored) ---
             function startPracticeSession(isGlobal = false) {
                 isGlobalSession = isGlobal;
-                practiceOriginScreen = isGlobal ? 'reviewCenter' : 'lessonSelection';
+                practiceOriginScreen = isGlobal ? 'reviewCenter' : 'lessonSelection'; // <-- FIX
                 practiceList = [];
                 let lessonsToPractice = isGlobal ? Object.keys(progress).filter(lk => getLessonStatus(lk).status === 'active') : [currentLessonKey];
                 
@@ -1270,12 +1264,14 @@
                 });
 
                 if (practiceList.length === 0) {
+                    // This can happen if a lesson is "active" but all reps are somehow done.
+                    // Go back to the origin screen to refresh it.
                     showScreen(practiceOriginScreen);
                     return;
                 }
 
                 practiceList.sort(() => Math.random() - 0.5);
-                currentPracticeItem = 0;
+                currentPracticeItem = 0; // Start at the first item
                 showScreen('practice', practiceOriginScreen);
                 displayCurrentPracticeItem();
             }
@@ -1371,7 +1367,7 @@
             function populateLevelSelectionScreen() {
                 const levelList = document.getElementById('level-list');
                 levelList.innerHTML = '';
-                Object.keys(LESSON_LIBRARY).forEach(levelName => {
+                Object.keys(LESSON_LIBRARY).forEach(levelName => { // <-- FIX: Renamed variable
                     const lessonKeysInLevel = Object.keys(LESSON_LIBRARY[levelName]);
                     const totalLessons = lessonKeysInLevel.length;
                     if (totalLessons === 0) return;
@@ -1391,7 +1387,7 @@
                     
                     const card = document.createElement('div');
                     card.className = 'level-card';
-                    card.dataset.level = levelName;
+                    card.dataset.level = levelName; // <-- FIX: Use correct variable
                     card.style.setProperty('--progress-percent', `${percentage}%`);
                     if (percentage >= 100) card.classList.add('completed');
                     card.innerHTML = `<span class="level-card-text">${levelName}</span>`;
@@ -1451,23 +1447,8 @@
             document.getElementById('start-lesson-practice-btn').addEventListener('click', () => startPracticeSession(false));
             document.getElementById('practice-banner').addEventListener('click', handlePracticeClick);
             document.getElementById('practice-speaker-icon').addEventListener('click', (e) => { e.stopPropagation(); if (currentPracticeItem >= 0 && currentPracticeItem < practiceList.length) speakSentence(practiceList[currentPracticeItem].sentence.en); });
-            
-            document.getElementById('level-list').addEventListener('click', (e) => { 
-                const card = e.target.closest('.level-card'); 
-                if (card) { 
-                    currentLevelKey = card.dataset.level; 
-                    showScreen('lessonSelection', 'levelSelection'); 
-                } 
-            });
-            
-            document.getElementById('lesson-list').addEventListener('click', (e) => { 
-                const card = e.target.closest('.lesson-card'); 
-                if (card) { 
-                    currentLessonKey = card.dataset.lesson;
-                    showScreen('lesson', 'lessonSelection'); 
-                } 
-            });
-
+            document.getElementById('level-list').addEventListener('click', (e) => { const card = e.target.closest('.level-card'); if (card) { currentLevelKey = card.dataset.level; showScreen('lessonSelection', 'levelSelection'); } });
+            document.getElementById('lesson-list').addEventListener('click', (e) => { const card = e.target.closest('.lesson-card'); if (card) { populateLessonScreen(currentLevelKey, card.dataset.lesson); showScreen('lesson', 'lessonSelection'); } });
             document.getElementById('writing-exercise-check-btn').addEventListener('click', () => {
                 const input = document.getElementById('writing-exercise-input');
                 const feedback = document.getElementById('writing-exercise-feedback');
@@ -1487,7 +1468,7 @@
             document.getElementById('back-to-level-select-from-lesson').addEventListener('click', () => showScreen('levelSelection'));
             document.getElementById('back-to-lesson-select-from-lesson-view').addEventListener('click', () => showScreen('lessonSelection'));
             document.getElementById('back-to-previous-screen').addEventListener('click', () => showScreen(previousScreen));
-            document.getElementById('back-to-origin-from-complete').addEventListener('click', () => showScreen(practiceOriginScreen));
+            document.getElementById('back-to-origin-from-complete').addEventListener('click', () => showScreen(practiceOriginScreen)); // <-- FIX
             
             // --- Auth Logic ---
             const authErrorDiv = document.getElementById('auth-error');
@@ -1505,11 +1486,12 @@
             async function continueAsGuest() {
                 isGuestMode = true;
                 document.getElementById('user-stats-container').classList.add('hidden');
-                await initializeUserSession(null);
+                await initializeUserSession(null); // تهيئة جلسة الزائر
                 showScreen('start');
             }
 
             async function initializeUserSession(user) {
+                // دالة مركزية لتهيئة جلسة المستخدم سواء كان مسجلاً أو زائراً
                 if (isGuestMode) {
                     await loadProgress();
                     await loadStats(null);
@@ -1532,6 +1514,7 @@
                 authErrorDiv.textContent = '';
                 const { error } = await supabaseClient.auth.signInWithPassword({ email: document.getElementById('login-email').value, password: document.getElementById('login-password').value });
                 if (error) authErrorDiv.textContent = 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
+                // onAuthStateChange سيقوم بالباقي
             });
 
             document.getElementById('signup-form').addEventListener('submit', async (e) => {
@@ -1548,10 +1531,11 @@
                     showScreen('login');
                     return; 
                 }
-                sessionStorage.removeItem(LAST_SCREEN_KEY); // <-- FIX: Clear last screen on logout
+                showScreen('loading');
                 const { error } = await supabaseClient.auth.signOut();
                 if (error) {
                     console.error('Error logging out:', error);
+                    showScreen('profile');
                 }
             });
 
@@ -1561,13 +1545,6 @@
             document.getElementById('go-to-login').addEventListener('click', () => showScreen('login'));
 
             // --- Initial Load & Auth State Handling ---
-            window.addEventListener('beforeunload', () => {
-                // <-- FIX: Save current screen before page unloads
-                if (currentScreenId && currentScreenId !== 'login' && currentScreenId !== 'signup') {
-                    sessionStorage.setItem(LAST_SCREEN_KEY, currentScreenId);
-                }
-            });
-
             supabaseClient.auth.onAuthStateChange(async (event, session) => {
                 const user = session?.user;
 
@@ -1587,24 +1564,16 @@
                     const { data: { session }, error } = await supabaseClient.auth.getSession();
                     if (error) throw error;
                     
-                    document.querySelector('main').style.display = 'flex'; // Show content area
-
                     if (session && session.user) {
                         isGuestMode = false;
                         await initializeUserSession(session.user);
-                        const lastScreen = sessionStorage.getItem(LAST_SCREEN_KEY);
-                        // FIX: Go to last screen if it exists, otherwise go to start
-                        if (lastScreen && screens[lastScreen]) {
-                            showScreen(lastScreen);
-                        } else {
-                            showScreen('start');
-                        }
+                        showScreen('start', 'loading');
                     } else {
-                        showScreen('login');
+                        showScreen('login', 'loading');
                     }
                 } catch (error) {
                     console.error("خطأ أثناء التحقق من الجلسة الأولية:", error);
-                    showScreen('login');
+                    showScreen('login', 'loading');
                 }
             }
 
