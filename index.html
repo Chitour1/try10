@@ -871,27 +871,6 @@
             let countdownInterval = null;
             let voices = [];
 
-            // Helper to ensure FULL_LESSON_LIBRARY is loaded
-            async function ensureFullLibraryLoaded() {
-                if (Object.keys(FULL_LESSON_LIBRARY).length > 0) return;
-                async function loadGroup(group) {
-                    try {
-                        const module = await import(group.filePath);
-                        const exportedKey = Object.keys(module)[0];
-                        const content = module[exportedKey];
-                        if (exportedKey.includes('SUB_GROUPS')) {
-                            for (const subGroup of content) await loadGroup(subGroup);
-                        } else {
-                            Object.assign(FULL_LESSON_LIBRARY, content);
-                        }
-                    } catch (e) { console.error(`Failed to load library file: ${group.filePath}`, e); }
-                }
-                for (const group of LIBRARY_INDEX) await loadGroup(group);
-            }
-
-            // Call it early to ensure FULL_LESSON_LIBRARY is available for loadProgress
-            await ensureFullLibraryLoaded();
-
             // --- Gamification & Data Functions ---
             async function loadStats() {
                 if (isGuestMode) {
@@ -1020,27 +999,13 @@
                 const { data, error } = await supabaseClient.from('lesson_progress').select('*').eq('user_id', user.id);
                 if (error) { console.error("Error loading progress:", error); return; }
                 
-                // When loading, ensure sentenceProgress includes all sentences from the current library version,
-                // using saved counts or defaulting to 0. This handles schema changes in lessons.
                 progress = data.reduce((acc, item) => {
-                    const lessonSentences = getLessonSentences(item.lesson_key, FULL_LESSON_LIBRARY);
-                    if (lessonSentences) {
-                        const completeSentenceProgress = lessonSentences.reduce((sAcc, s) => {
-                            // Use the saved count if it exists, otherwise default to 0
-                            sAcc[s.id] = (item.sentence_progress && item.sentence_progress[s.id] !== undefined) ? item.sentence_progress[s.id] : 0;
-                            return sAcc;
-                        }, {});
-                        acc[item.lesson_key] = {
-                            stage: item.stage,
-                            lastCompletion: item.last_completion,
-                            sentenceProgress: completeSentenceProgress
-                        };
-                    } else {
-                        // If lesson not found in current library (e.g., deleted or renamed), load as is.
-                        // Or you might choose to skip it if it's truly obsolete.
-                        acc[item.lesson_key] = { stage: item.stage, lastCompletion: item.last_completion, sentenceProgress: item.sentence_progress };
-                        console.warn(`Lesson key '${item.lesson_key}' found in progress but not in FULL_LESSON_LIBRARY. It might be obsolete.`);
-                    }
+                    // Ensure sentenceProgress is always an object, even if null from DB
+                    acc[item.lesson_key] = { 
+                        stage: item.stage, 
+                        lastCompletion: item.last_completion, 
+                        sentenceProgress: item.sentence_progress || {} 
+                    };
                     return acc;
                 }, {});
             }
@@ -1059,39 +1024,11 @@
             }
             
             function initializeLessonProgress(lessonKey, library) {
-                // Ensure progress object exists for this lessonKey, merging with existing data if present.
-                // This function is now defensive and will ensure all sentences are accounted for.
-                const lessonSentences = getLessonSentences(lessonKey, library);
-                if (!lessonSentences) {
-                    console.warn(`Attempted to initialize progress for unknown lesson key: ${lessonKey}`);
-                    return;
-                }
-
-                // Retrieve existing progress or create a default structure
-                const existingProgress = progress[lessonKey] || {
-                    stage: 0,
-                    lastCompletion: null,
-                    sentenceProgress: {}
-                };
-
-                // Create a new sentenceProgress object, ensuring all sentences from the current lesson
-                // are present, using existing counts or defaulting to 0.
-                const newSentenceProgress = lessonSentences.reduce((acc, s) => {
-                    acc[s.id] = (existingProgress.sentenceProgress && existingProgress.sentenceProgress[s.id] !== undefined) ? existingProgress.sentenceProgress[s.id] : 0;
-                    return acc;
-                }, {});
-
-                // Update the global progress object
-                progress[lessonKey] = {
-                    stage: existingProgress.stage,
-                    lastCompletion: existingProgress.lastCompletion,
-                    sentenceProgress: newSentenceProgress
-                };
-                
-                // Only save if this is a truly new initialization (e.g., the lesson wasn't in DB/local storage)
-                // This prevents unnecessary DB writes if progress was just loaded and normalized.
-                if (!existingProgress.lastCompletion && existingProgress.stage === 0 && Object.keys(existingProgress.sentenceProgress).length === 0) {
-                    saveProgress(lessonKey); 
+                if (!progress[lessonKey]) {
+                    const lessonSentences = getLessonSentences(lessonKey, library);
+                    if (!lessonSentences) return;
+                    progress[lessonKey] = { stage: 0, lastCompletion: null, sentenceProgress: lessonSentences.reduce((acc, s) => { acc[s.id] = 0; return acc; }, {}) };
+                    saveProgress(lessonKey);
                 }
             }
 
@@ -1179,9 +1116,7 @@
                 
                 let incompleteReps = 0;
                 sentences.forEach(sentence => {
-                    // Ensure sentenceProgress has an entry for this sentence ID, default to 0 if not.
-                    // This is now redundant due to `initializeLessonProgress` but kept for safety.
-                    const repsDone = lessonProgress.sentenceProgress[sentence.id] || 0; 
+                    const repsDone = lessonProgress.sentenceProgress[sentence.id] || 0;
                     if (repsDone < repsNeeded) incompleteReps += (repsNeeded - repsDone);
                     listContainer.appendChild(createSentenceCard(sentence, repsDone, repsNeeded));
                 });
@@ -1191,9 +1126,6 @@
                 practiceBtn.textContent = incompleteReps === 0 ? 'الدرس مكتمل!' : `ابدأ التمرين (${incompleteReps} تكرار متبقي)`;
             }
 
-            // `ensureFullLibraryLoaded` moved to be called once at `initializeApp` start.
-            // Old function was here:
-            /*
             async function ensureFullLibraryLoaded() {
                 if (Object.keys(FULL_LESSON_LIBRARY).length > 0) return;
                 async function loadGroup(group) {
@@ -1210,18 +1142,16 @@
                 }
                 for (const group of LIBRARY_INDEX) await loadGroup(group);
             }
-            */
 
             async function populateReviewCenter() {
-                // FULL_LESSON_LIBRARY is already loaded by `initializeApp`
+                await ensureFullLibraryLoaded();
                 const container = document.getElementById('review-list-container');
                 container.innerHTML = '';
                 const sections = {};
                 let activeLessonsForReview = [];
 
                 Object.keys(progress).forEach(lessonKey => {
-                    // Use FULL_LESSON_LIBRARY here as progress contains keys for all lessons
-                    if (!getLessonSentences(lessonKey, FULL_LESSON_LIBRARY)) return; 
+                    if (!getLessonSentences(lessonKey, FULL_LESSON_LIBRARY)) return;
                     const status = getLessonStatus(lessonKey);
                     if (status.status === 'learning') return;
                     const stage = status.stage;
@@ -1257,14 +1187,7 @@
                     else {
                         if (sentencesContainer.innerHTML === '') {
                             const sentences = getLessonSentences(lessonKey, FULL_LESSON_LIBRARY);
-                            if(sentences) {
-                                const lessonProgress = progress[lessonKey]; // Get current progress
-                                const repsNeeded = SRS_STAGES[lessonProgress.stage].reps; // Reps needed for current stage
-                                sentences.forEach(s => {
-                                    const repsDone = lessonProgress.sentenceProgress[s.id] || 0; // Get actual reps done
-                                    sentencesContainer.appendChild(createSentenceCard(s, repsDone, repsNeeded));
-                                });
-                            }
+                            if(sentences) sentences.forEach(s => sentencesContainer.appendChild(createSentenceCard(s, '✓', '✓')));
                         }
                         sentencesContainer.style.display = 'block';
                     }
@@ -1290,34 +1213,22 @@
                 isGlobalSession = isGlobal;
                 practiceList = [];
                 let lessonsToPractice = isGlobal ? Object.keys(progress).filter(lk => getLessonStatus(lk).status === 'active') : [currentLessonKey];
-                if (lessonsToPractice.length === 0) {
-                    alert('لا توجد دروس متاحة للمراجعة أو التمرين في الوقت الحالي.');
-                    showScreen(previousScreen); // Go back if no lessons to practice
-                    return;
-                }
+                if (lessonsToPractice.length === 0) return;
                 const libraryToUse = isGlobal ? FULL_LESSON_LIBRARY : LESSON_LIBRARY;
                 lessonsToPractice.forEach(lessonKey => {
-                    // Ensure progress for this lesson is properly initialized and synced with the full library
-                    initializeLessonProgress(lessonKey, libraryToUse); 
                     const lessonProgress = progress[lessonKey];
-                    if (!lessonProgress) return; // Should not happen after initializeLessonProgress
-
+                    if (!lessonProgress) return;
                     const repsNeeded = SRS_STAGES[lessonProgress.stage].reps;
                     const sentences = getLessonSentences(lessonKey, libraryToUse);
                     if (!sentences) return;
-
                     sentences.forEach(sentence => {
-                        const repsDone = lessonProgress.sentenceProgress[sentence.id] || 0; // Use || 0 as a fallback
+                        const repsDone = lessonProgress.sentenceProgress[sentence.id] || 0;
                         if (repsDone < repsNeeded) {
                             for (let i = 0; i < (repsNeeded - repsDone); i++) practiceList.push({ sentence, lessonKey });
                         }
                     });
                 });
-                if (practiceList.length === 0) {
-                    alert('لا توجد جمل متبقية في هذه الجلسة!');
-                    showScreen(previousScreen); // Go back if no sentences to practice
-                    return;
-                }
+                if (practiceList.length === 0) return;
                 practiceList.sort(() => Math.random() - 0.5);
                 currentPracticeItem = -1;
                 showScreen('practice', isGlobal ? 'reviewCenter' : 'lesson');
@@ -1352,34 +1263,18 @@
                 document.getElementById('practice-banner').classList.add('clicked');
                 setTimeout(() => { document.getElementById('practice-banner').classList.remove('clicked'); }, 150);
                 const { sentence, lessonKey } = practiceList[currentPracticeItem];
-                
-                // Ensure sentenceProgress for this specific sentence is incremented
-                if (progress[lessonKey] && progress[lessonKey].sentenceProgress[sentence.id] !== undefined) {
-                    progress[lessonKey].sentenceProgress[sentence.id]++;
-                } else {
-                    // This case should ideally not happen if initializeLessonProgress is robust
-                    console.warn(`Sentence ID ${sentence.id} not found in progress for lesson ${lessonKey}. Initializing.`);
-                    initializeLessonProgress(lessonKey, isGlobalSession ? FULL_LESSON_LIBRARY : LESSON_LIBRARY);
-                    progress[lessonKey].sentenceProgress[sentence.id] = 1; // Set to 1 after initialization
-                }
-
+                progress[lessonKey].sentenceProgress[sentence.id]++;
                 addPoints(1);
                 const libraryToUse = isGlobalSession ? FULL_LESSON_LIBRARY : LESSON_LIBRARY;
                 const lessonSentences = getLessonSentences(lessonKey, libraryToUse);
                 if (!lessonSentences) { displayNextPracticeItem(); return; }
-                
                 const repsNeeded = SRS_STAGES[progress[lessonKey].stage].reps;
-                // Check if the current lesson is complete (all sentences have enough reps)
                 const isLessonComplete = lessonSentences.every(s => (progress[lessonKey].sentenceProgress[s.id] || 0) >= repsNeeded);
-
                 if (isLessonComplete) {
-                    if (progress[lessonKey].stage === 0) addPoints(50); // Bonus for completing initial learning phase
+                    if (progress[lessonKey].stage === 0) addPoints(50);
                     progress[lessonKey].stage++;
                     progress[lessonKey].lastCompletion = new Date().toISOString();
-                    // Reset sentence reps for the next SRS stage, but only if not mastered.
-                    if (progress[lessonKey].stage < SRS_STAGES.length) {
-                        lessonSentences.forEach(s => { progress[lessonKey].sentenceProgress[s.id] = 0; });
-                    }
+                    lessonSentences.forEach(s => { progress[lessonKey].sentenceProgress[s.id] = 0; });
                 }
                 await saveProgress(lessonKey);
                 displayNextPracticeItem();
@@ -1428,7 +1323,7 @@
                     if (totalLessons === 0) return;
                     let lessonsInitiallyCompleted = 0, lessonsMastered = 0;
                     lessonKeysInLevel.forEach(lessonKey => {
-                        initializeLessonProgress(lessonKey, LESSON_LIBRARY); // Ensure each lesson's progress is hydrated
+                        initializeLessonProgress(lessonKey, LESSON_LIBRARY);
                         const lessonProgress = progress[lessonKey];
                         if (lessonProgress) {
                             if (lessonProgress.stage > 0) lessonsInitiallyCompleted++;
@@ -1450,22 +1345,17 @@
                  const lessonList = document.getElementById('lesson-list');
                  lessonList.innerHTML = '';
                  Object.keys(LESSON_LIBRARY[levelKey]).forEach(lessonKey => {
-                    initializeLessonProgress(lessonKey, LESSON_LIBRARY); // Ensure each lesson's progress is hydrated
+                    initializeLessonProgress(lessonKey, LESSON_LIBRARY);
                     const lessonProgress = progress[lessonKey];
                     const lessonSentences = getLessonSentences(lessonKey);
-                    if (!lessonProgress || !lessonSentences) return; // Should not be null after initializeLessonProgress
-
+                    if (!lessonProgress || !lessonSentences) return;
                     const status = getLessonStatus(lessonKey);
                     let percentage = 0;
                     if (status.status === 'mastered' || (lessonProgress.stage > 0 && status.status === 'locked')) {
-                        // If mastered or in a later stage (and thus locked until due), assume 100% for display
                         percentage = 100;
                     } else if (lessonProgress.stage === 0) {
                         const repsNeededForStage = SRS_STAGES[lessonProgress.stage].reps;
-                        let totalRepsDone = 0;
-                        lessonSentences.forEach(s => {
-                            totalRepsDone += (lessonProgress.sentenceProgress[s.id] || 0);
-                        });
+                        let totalRepsDone = lessonSentences.reduce((sum, s) => sum + (progress[lessonKey].sentenceProgress[s.id] || 0), 0);
                         const totalRepsNeeded = lessonSentences.length * repsNeededForStage;
                         if (totalRepsNeeded > 0) percentage = (totalRepsDone / totalRepsNeeded) * 100;
                     }
